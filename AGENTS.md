@@ -124,16 +124,19 @@ Consumer는 반드시 다음 순서를 지킨다. 어떤 이유로도 순서를 
 ├── producer/         # IoT 센서 시뮬레이터
 ├── consumer/         # Kafka Consumer, 처리 로직
 ├── api/              # FastAPI 엔드포인트
+│   └── openapi.yml   # API 스펙 (FastAPI 자동 생성, BUILDER 산출물)
 ├── infra/            # docker-compose.yml, 환경 설정
 ├── docs/             # architecture.md, data-flow.md, tradeoff.md,
 │                     # failure-case.md, kafka-design.md
 ├── conversation/     # Agent 작업 이력 (의사결정 로그)
+├── cost/             # Phase·Task별 실제 사용량 기록
 ├── role/             # Agent별 역할 지침
 │   ├── PLANNER.md
 │   ├── BUILDER.md
 │   ├── REVIEWER.md
 │   └── FIXER.md
 ├── AGENTS.md         # 본 문서 (전체 공통 지침)
+├── plan.md           # 구현 계획 요약 (PLANNER 산출물, 세션 간 연결용)
 └── spec.md           # 최종 요구사항 기준 문서
 ```
 
@@ -141,15 +144,15 @@ Consumer는 반드시 다음 순서를 지킨다. 어떤 이유로도 순서를 
 
 ## 8. 필수 문서 산출물
 
-BUILDER 및 이후 단계에서 반드시 생성해야 하는 문서:
-
-| 파일 | 내용 |
-|---|---|
-| `docs/architecture.md` | 전체 시스템 구조, 컴포넌트 역할 |
-| `docs/data-flow.md` | 이벤트 흐름, 처리 순서, 시간 기준 처리 |
-| `docs/tradeoff.md` | 설계 선택 이유, 트레이드오프 분석 |
-| `docs/failure-case.md` | 장애 시나리오 및 대응 전략 |
-| `docs/kafka-design.md` | Partition 전략, Lag 대응, Consumer 구조 |
+| 파일 | 생성 주체 | 내용 |
+|---|---|---|
+| `plan.md` | **PLANNER** | 구현 계획 요약 — Phase 분할, 기술 결정, 트레이드오프 (세션 간 연결용 진입점) |
+| `docs/architecture.md` | BUILDER | 전체 시스템 구조, 컴포넌트 역할 |
+| `docs/data-flow.md` | BUILDER | 이벤트 흐름, 처리 순서, 시간 기준 처리 |
+| `docs/tradeoff.md` | BUILDER | 설계 선택 이유, 트레이드오프 분석 |
+| `docs/failure-case.md` | BUILDER | 장애 시나리오 및 대응 전략 |
+| `docs/kafka-design.md` | BUILDER | Partition 전략, Lag 대응, Consumer 구조 |
+| `api/openapi.yml` | **BUILDER** | FastAPI 자동 생성 API 스펙 (`app.openapi()` 또는 `/openapi.json` export) |
 
 ---
 

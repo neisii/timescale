@@ -64,6 +64,15 @@ Consumer는 반드시 다음 순서로 처리한다:
 - 중요한 로직(dedup, time window, 장애 처리)에는 간결한 주석을 남긴다.
 - 파일 구조는 PLANNER가 정의한 디렉토리 구조를 따른다.
 
+### openapi.yml 생성
+- FastAPI 앱 구동 후 `/openapi.json` 엔드포인트를 export하거나 `app.openapi()`를 호출하여 `api/openapi.yml`로 저장한다.
+- 추가 구현 없이 FastAPI가 자동 생성하므로 반드시 포함한다.
+- 각 엔드포인트에 `summary`, `description`, `response_model`이 명시되어 있어야 스펙이 의미 있게 생성된다.
+
+### plan.md 갱신
+- PLANNER가 작성한 `plan.md`의 "Phase 분할 및 진행 현황" 표에서 **Phase 2(BUILDER) 상태를 완료로 갱신**한다.
+- 구현 과정에서 PLANNER 설계와 달라진 결정이 있으면 "기술 결정 요약"과 "다음 Agent에게" 항목도 업데이트한다.
+
 ### 이력 기록 (Operation & Logging)
 - 작업 시작 전 `conversation/P1_*` 문서를 모두 확인하여 PLANNER의 설계 의도를 파악한다.
 - 구현을 완료한 후, 반드시 `conversation/` 디렉토리에 이력 문서를 기록한다.
