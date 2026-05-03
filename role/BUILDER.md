@@ -52,12 +52,85 @@ Consumer는 반드시 다음 순서로 처리한다:
 - Redis 연결 실패, DB 연결 실패 상황에 대한 기본 오류 처리를 포함한다.
 
 ### 인프라 구성
-- `infra/docker-compose.yml`로 전체 시스템을 단일 명령으로 실행 가능하게 구성한다:
-  - Kafka (+ Zookeeper 또는 KRaft)
-  - Redis
-  - PostgreSQL 또는 TimescaleDB
-  - Producer, Consumer, API 서비스
-- 환경변수는 `.env` 파일로 관리한다.
+
+`docker-compose up` 한 명령으로 클론 후 즉시 실행 가능해야 한다. 사용자가 수동으로 설정해야 하는 항목이 있어서는 안 된다.
+
+**필수 포함 서비스**
+- Kafka (KRaft 모드 권장 — Zookeeper 의존성 제거)
+- Redis
+- TimescaleDB (`timescale/timescaledb` 이미지 사용, `postgres` 이미지 사용 금지)
+- Producer, Consumer, API 서비스
+
+**Kafka 리스너 설정 (반드시 준수)**
+
+컨테이너 내부 통신용과 호스트 접근용 리스너를 반드시 분리한다. 아래 패턴을 따른다:
+```yaml
+KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+```
+Producer·Consumer 서비스는 컨테이너 내부 주소(`kafka:9092`)로 접속한다.
+
+**서비스 기동 순서 제어**
+
+`depends_on`만으로는 부족하다. 각 인프라 서비스에 `healthcheck`를 정의하고, 애플리케이션 서비스는 `condition: service_healthy`로 대기한다:
+```yaml
+depends_on:
+  kafka:
+    condition: service_healthy
+  db:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+```
+Producer·Consumer·API 서비스에는 `restart: on-failure`를 설정하여 인프라 준비 전 기동 실패 시 자동 재시도한다.
+
+**각 서비스 healthcheck 기준**
+
+| 서비스 | healthcheck 명령 |
+|---|---|
+| Kafka | `kafka-topics.sh --bootstrap-server localhost:9092 --list` |
+| TimescaleDB | `pg_isready -U ${POSTGRES_USER}` |
+| Redis | `redis-cli ping` |
+
+**TimescaleDB 초기화**
+
+`infra/init/` 디렉토리에 초기화 SQL 스크립트를 작성하고 docker-compose volume으로 마운트한다:
+```sql
+CREATE EXTENSION IF NOT EXISTS timescaledb;
+CREATE TABLE IF NOT EXISTS sensor_events (...);
+SELECT create_hypertable('sensor_events', 'timestamp', if_not_exists => TRUE);
+```
+docker-compose의 `/docker-entrypoint-initdb.d/` 경로에 마운트하여 컨테이너 최초 기동 시 자동 실행되도록 한다.
+
+**Kafka 토픽 자동 생성**
+
+`infra/init/` 에 토픽 생성 스크립트를 작성하거나, docker-compose에 init 컨테이너를 추가하여 Kafka 기동 후 자동으로 토픽을 생성한다:
+```yaml
+kafka-init:
+  image: confluentinc/cp-kafka:latest
+  depends_on:
+    kafka:
+      condition: service_healthy
+  command: kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic sensor-events --partitions 3
+```
+
+**환경변수 관리**
+
+- `.env.example` 파일을 작성하여 필요한 환경변수 목록과 기본값을 제공한다.
+- `.env` 파일은 `.gitignore`에 추가한다.
+- docker-compose는 `.env` 파일을 자동으로 읽으므로 사용자는 `.env.example`을 복사하여 즉시 사용할 수 있어야 한다.
+
+**검증 스크립트**
+
+`infra/verify.sh`를 작성하여 전체 스택이 정상 기동되었는지 자동으로 확인한다:
+```bash
+# 각 서비스 healthcheck 상태 확인
+# Kafka 토픽 존재 여부 확인
+# TimescaleDB hypertable 생성 여부 확인
+# Redis ping 응답 확인
+# API /health 엔드포인트 응답 확인
+```
 
 ### 코드 품질
 - 각 파일은 완전한 코드를 제공한다 (불완전한 스텁 금지).
@@ -103,6 +176,11 @@ Consumer는 반드시 다음 순서로 처리한다:
 - **PLANNER 설계를 무단으로 변경하지 않는다.** 설계와 다르게 구현해야 할 경우 반드시 Notes에 이유를 명시한다.
 - **처리 순서를 바꾸지 않는다.** 유효성 검증 전에 저장하거나, 중복 확인 전에 처리하는 등의 순서 위반을 하지 않는다.
 - **미완성 코드를 제출하지 않는다.** `TODO`, `pass`, `...`, `NotImplemented` 등 구현되지 않은 부분을 남기지 않는다.
+- **`postgres` 이미지를 TimescaleDB 용도로 사용하지 않는다.** 반드시 `timescale/timescaledb` 이미지를 사용한다.
+- **`depends_on`만으로 기동 순서를 제어하지 않는다.** 반드시 `condition: service_healthy`와 healthcheck를 함께 사용한다.
+- **Kafka 리스너를 단일로 설정하지 않는다.** 컨테이너 내부·외부 리스너를 반드시 분리한다.
+- **`.env` 파일을 레포에 커밋하지 않는다.** `.env.example`만 커밋한다.
+- **Kafka 토픽과 TimescaleDB hypertable을 수동 생성에 의존하지 않는다.** 반드시 자동 초기화 스크립트로 처리한다.
 - **event time과 processing time을 혼용하지 않는다.** 시간 기준 필터링은 반드시 event time 기준으로 수행한다.
 - **Redis dedup을 생략하지 않는다.** 성능 이유로 dedup 로직을 건너뛰지 않는다.
 
