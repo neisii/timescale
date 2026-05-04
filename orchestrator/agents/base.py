@@ -115,10 +115,13 @@ class BaseAgent:
     # ── API call with retry ────────────────────────────────────────────────────
 
     def _api_call(self, **kwargs):
+        # messages.create() raises ValueError for max_tokens that may exceed 10 min.
+        # stream() + get_final_message() returns the same Message object without the limit.
         last_err: Exception | None = None
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
-                return _client.messages.create(**kwargs)
+                with _client.messages.stream(**kwargs) as stream:
+                    return stream.get_final_message()
             except anthropic.RateLimitError as exc:
                 last_err = exc
                 wait = _RETRY_BASE_S * attempt
