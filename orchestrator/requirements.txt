@@ -1,0 +1,4 @@
+# No external Python dependencies — uses only stdlib + claude CLI subprocess
+# claude CLI must be installed and authenticated separately:
+#   npm install -g @anthropic-ai/claude-code
+#   claude auth login
