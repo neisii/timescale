@@ -1,12 +1,15 @@
 """BaseAgent: Anthropic SDK wrapper with native tool execution and extended thinking."""
 
 import time
+from datetime import datetime
 from pathlib import Path
 
 import anthropic
 
 from config import AGENT_CONFIGS, THINKING_BUDGETS, HAIKU, AGENTS_MD, ROLE_FILES, PROJECT_ROOT
 from state import UsageInfo
+
+_WRITE_FAIL_THRESHOLD = 2  # consecutive write_file failures before aborting
 
 _client = anthropic.Anthropic()
 
@@ -127,6 +130,21 @@ class BaseAgent:
                 time.sleep(_RETRY_BASE_S)
         raise last_err or RuntimeError("API call failed after all retries")
 
+    # ── Emergency dump ─────────────────────────────────────────────────────────
+
+    def _emergency_dump(self, text: str, thinking: str, exc: Exception) -> None:
+        ts   = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = self.project_root / f"emergency_dump_{self.ROLE}_{ts}.md"
+        sections = [f"# Emergency Dump — {self.ROLE}\n\n**Error:** {exc}\n"]
+        if thinking:
+            sections.append(f"## Thinking\n\n{thinking}")
+        if text:
+            sections.append(f"## Output\n\n{text}")
+        if not thinking and not text:
+            sections.append("*(no content captured)*")
+        path.write_text("\n\n".join(sections), encoding="utf-8")
+        print(f"\n    ⚠  emergency dump → {path.name}", flush=True)
+
     # ── Main run ───────────────────────────────────────────────────────────────
 
     def _run(self, prompt: str, config: dict | None = None) -> tuple[str, UsageInfo]:
@@ -158,43 +176,63 @@ class BaseAgent:
         print(f"    {label} ", end="", flush=True)
 
         messages: list[dict] = [{"role": "user", "content": prompt}]
-        usage      = UsageInfo(model=model)
-        final_text = ""
+        usage           = UsageInfo(model=model)
+        final_text      = ""
+        final_thinking  = ""
+        write_fail_streak = 0
 
-        for _ in range(_MAX_TOOL_ROUNDS):
-            resp = self._api_call(
-                model=model,
-                max_tokens=max_tokens,
-                system=self._load_system_prompt(),
-                tools=_TOOLS,
-                messages=messages,
-                **thinking_param,
-            )
-            print(".", end="", flush=True)
+        try:
+            for _ in range(_MAX_TOOL_ROUNDS):
+                resp = self._api_call(
+                    model=model,
+                    max_tokens=max_tokens,
+                    system=self._load_system_prompt(),
+                    tools=_TOOLS,
+                    messages=messages,
+                    **thinking_param,
+                )
+                print(".", end="", flush=True)
 
-            u = resp.usage
-            usage.input_tokens      += u.input_tokens
-            usage.output_tokens     += u.output_tokens
-            usage.cache_read_tokens += getattr(u, "cache_read_input_tokens", 0)
+                u = resp.usage
+                usage.input_tokens      += u.input_tokens
+                usage.output_tokens     += u.output_tokens
+                usage.cache_read_tokens += getattr(u, "cache_read_input_tokens", 0)
 
-            for block in resp.content:
-                if block.type == "text":
-                    final_text += block.text
+                for block in resp.content:
+                    if block.type == "text":
+                        final_text += block.text
+                    elif block.type == "thinking":
+                        final_thinking += getattr(block, "thinking", "")
 
-            tool_calls = [b for b in resp.content if b.type == "tool_use"]
-            if not tool_calls or resp.stop_reason == "end_turn":
-                break
+                tool_calls = [b for b in resp.content if b.type == "tool_use"]
+                if not tool_calls or resp.stop_reason == "end_turn":
+                    break
 
-            tool_results = [
-                {
-                    "type": "tool_result",
-                    "tool_use_id": call.id,
-                    "content": self._execute_tool(call),
-                }
-                for call in tool_calls
-            ]
-            messages.append({"role": "assistant", "content": resp.content})
-            messages.append({"role": "user",      "content": tool_results})
+                tool_results = []
+                for call in tool_calls:
+                    result = self._execute_tool(call)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": call.id,
+                        "content": result,
+                    })
+                    if call.name == "write_file" and result.startswith("ERROR"):
+                        write_fail_streak += 1
+                        print(f"\n    ✗ write_file failed ({write_fail_streak}/{_WRITE_FAIL_THRESHOLD}): {result}", flush=True)
+                        if write_fail_streak >= _WRITE_FAIL_THRESHOLD:
+                            raise RuntimeError(f"write_file failed {write_fail_streak} times in a row: {result}")
+                    elif call.name == "write_file":
+                        write_fail_streak = 0
+
+                messages.append({"role": "assistant", "content": resp.content})
+                messages.append({"role": "user",      "content": tool_results})
+
+        except Exception as exc:
+            try:
+                self._emergency_dump(final_text, final_thinking, exc)
+            except Exception as dump_err:
+                print(f"\n    ⚠  emergency dump 실패: {dump_err}", flush=True)
+            raise
 
         print()
         return final_text, usage
